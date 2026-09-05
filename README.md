@@ -1042,12 +1042,24 @@ context on one GPU:
   table. `kv_b_proj` is the exception that would win (0.39x cold) and needs a
   per-head batched kernel that does not exist.
 
-  The L2 caveat is not incidental. Timing one weight tensor repeatedly keeps it
-  resident and erases the whole effect: measured that way the same M=8 points
-  read 1.13 and 0.97 instead of 0.68 and 0.45, i.e. roughly parity instead of a
-  2x win. A 6-bit 4096x4096 weight is 12.6 MB and its bf16 twin is 33.5 MB, so on
-  a 128 MiB L2 both stay cached and neither pays for what it reads. Any benchmark
-  of a quantized GEMM has to defeat that or it measures the wrong thing.
+  **The L2 caveat is not incidental, and its sign depends on the card.** Timing
+  one weight tensor repeatedly keeps it resident and erases the effect the
+  trellis exists for. Measured warm, the same M=8 points read 1.13 and 0.97
+  instead of 0.68 and 0.45 -- parity instead of a 2x win -- because a 6-bit
+  4096x4096 weight is 12.6 MB and its bf16 twin 33.5 MB, so on a 128 MiB L2 both
+  stay cached and neither pays for what it reads.
+
+  On a 24 MiB L2 the same benchmark lies in the *opposite* direction: only the
+  trellis fits, so warm makes it look far better than it is. Measured on GB10
+  (#5), the same two control shapes read 0.144 / 0.133 warm against 0.272 / 0.254
+  cold. Warm flatters bf16 on a big cache and the trellis on a small one; **only
+  cold is honest on either.**
+
+  The referee is the engine. Per-call costs from a production profile match the
+  cold arm within 20% and the warm arm by a factor of 2.2-2.4x. Any benchmark of
+  a quantized GEMM has to rotate a working set past the cache, and a bandwidth
+  ruler in the same run is the cheapest detector for having failed to -- a read
+  reported above the device's peak is the artefact announcing itself.
 
   That matters for a full-scope checkpoint, where attention and the head are
   EXL3 too: it is a large decode win and a small prefill loss. Measured on GB10
