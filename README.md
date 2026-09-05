@@ -1016,10 +1016,26 @@ context on one GPU:
   | 6 | 2048 | 277 | 353 | 1.27x |
   | 6 | 8192 | 320 | 388 | 1.21x |
 
-  Adding the input transform, the whole dense path is 1.25-1.55x slower than
-  bf16 above about M=256. **Below it the trellis wins**, because there the layer
-  is bandwidth-bound and 4-6 bits of weight beat 16. The crossover is near
-  M=64-256 on this card.
+  Adding the input transform, the whole dense path against `torch.matmul` bf16
+  on the same shapes, **with the weights rotated so the working set overruns L2**
+  (which is what a real step does -- every layer's weights come from DRAM once):
+
+  | K x N | M=8 | M=64 | M=256 | M=2048 |
+  |---|---|---|---|---|
+  | 4096 x 4096 | **0.68** | **0.71** | 1.37 | 1.37 |
+  | 4096 x 11008 | **0.45** | **0.57** | 1.31 | 1.33 |
+
+  Ratio exl3/bf16; below 1.0 the trellis wins. **At decode it wins by 1.5-2.2x**
+  -- bandwidth-bound, and 4-6 bits of weight beat 16 -- and loses by ~1.35x above
+  about M=256, where the layer turns compute-bound and cuBLAS's tensor-core
+  efficiency dominates. The crossover is between M=64 and M=256.
+
+  The L2 caveat is not incidental. Timing one weight tensor repeatedly keeps it
+  resident and erases the whole effect: measured that way the same M=8 points
+  read 1.13 and 0.97 instead of 0.68 and 0.45, i.e. roughly parity instead of a
+  2x win. A 6-bit 4096x4096 weight is 12.6 MB and its bf16 twin is 33.5 MB, so on
+  a 128 MiB L2 both stay cached and neither pays for what it reads. Any benchmark
+  of a quantized GEMM has to defeat that or it measures the wrong thing.
 
   That matters for a full-scope checkpoint, where attention and the head are
   EXL3 too: it is a large decode win and a small prefill loss. Measured on GB10
