@@ -1030,6 +1030,18 @@ context on one GPU:
   about M=256, where the layer turns compute-bound and cuBLAS's tensor-core
   efficiency dominates. The crossover is between M=64 and M=256.
 
+  There is a second limit below the crossover, in the other direction. A module
+  small enough that its weights are not the cost gains nothing from having fewer
+  of them: measured on GB10 (#5), GLM-5.3-Flash's KDA gating arms are 0.72 MB per
+  rank at TP=3, about 3 us of traffic against a launch, input transform and
+  trellis-decode setup of several times that. They are fixed-cost-bound, so 4-bit
+  weights save bytes that were never being paid for, and the trellis measures
+  1.6-1.8x *slower* than bf16 there even with a cold cache. The whole family is
+  0.85 ms of a 72.5 ms decode step, so it does not matter -- but it is why a
+  checkpoint that leaves small modules in bf16 is not leaving anything on the
+  table. `kv_b_proj` is the exception that would win (0.39x cold) and needs a
+  per-head batched kernel that does not exist.
+
   The L2 caveat is not incidental. Timing one weight tensor repeatedly keeps it
   resident and erases the whole effect: measured that way the same M=8 points
   read 1.13 and 0.97 instead of 0.68 and 0.45, i.e. roughly parity instead of a
